@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 from datetime import date, timedelta, datetime
 from PIL import Image
 import os
+from scipy.ndimage import binary_opening
 
 # === CONFIGURAÇÃO DO SENTINEL HUB ===
 config = SHConfig()
@@ -12,7 +13,7 @@ config.sh_client_secret = ''
 
 # Coordenada e área
 lat, lon = -26.90567708545667, -49.0556474962708
-aoi = BBox([lon - 0.0135, lat - 0.0135, lon + 0.0135, lat + 0.0135], crs=CRS.WGS84)
+aoi = BBox([lon - 0.0050, lat - 0.0050, lon + 0.0050, lat + 0.0050], crs=CRS.WGS84)
 resolution = 10
 width, height = bbox_to_dimensions(aoi, resolution)
 
@@ -92,13 +93,16 @@ evalscript_ndvi = """
 function setup() {
   return {
     input: ["B04", "B08", "SCL"],
-    output: { bands: 1 }
+    output: { bands: 1, sampleType: "FLOAT32" }
   };
 }
+
 function evaluatePixel(sample) {
-  if ([3, 8, 9, 10].includes(sample.SCL)) {
-    return [0]; // mascarar nuvem
+  // Ignora nuvens, sombras e água (SCL: 3, 8, 9, 10, 6)
+  if ([3, 6, 8, 9, 10].includes(sample.SCL)) {
+    return [null];  // Retorna null para gerar NaN em Python
   }
+
   let ndvi = (sample.B08 - sample.B04) / (sample.B08 + sample.B04);
   return [ndvi];
 }
@@ -134,12 +138,18 @@ rgb_atual_uint8 = np.clip(rgb_atual / np.max(rgb_atual) * 255, 0, 255).astype(np
 Image.fromarray(rgb_passado_uint8).save(f"{output_folder}/rgb_passado_{data_passada}.png")
 Image.fromarray(rgb_atual_uint8).save(f"{output_folder}/rgb_atual_{data_atual}.png")
 
-# === NDVI COMPARAÇÃO ===
+# === NDVI COMPARAÇÃO SOMENTE EM VEGETAÇÃO ===
+mascara_veg_original = ndvi_passado > 0.4
 delta_ndvi = ndvi_atual - ndvi_passado
-mascara_perda = (delta_ndvi < -0.008).astype(np.uint8)
+mascara_perda = (delta_ndvi < -0.1) & mascara_veg_original
 
-# === CALCULAR PORCENTAGEM ===
-percentual_perda = (np.count_nonzero(mascara_perda) / mascara_perda.size) * 100
+# === FILTRAR RUÍDOS COM ABERTURA MORFOLÓGICA ===
+mascara_perda = binary_opening(mascara_perda, structure=np.ones((3, 3)))
+
+# === CÁLCULO DA PERDA DE VEGETAÇÃO ===
+pixels_validos = np.count_nonzero(mascara_veg_original)
+pixels_perda = np.count_nonzero(mascara_perda)
+percentual_perda = (pixels_perda / pixels_validos) * 100
 print(f"Perda de vegetação estimada: {percentual_perda:.2f}%")
 
 # === SALVAR RESULTADOS ===
@@ -149,7 +159,7 @@ Image.fromarray(((ndvi_passado + 1) / 2 * 255).astype(np.uint8)).save(f"{output_
 Image.fromarray(((ndvi_atual + 1) / 2 * 255).astype(np.uint8)).save(f"{output_folder}/ndvi_atual.png")
 
 # Salvar máscara
-Image.fromarray((mascara_perda * 255).astype(np.uint8)).save(f"{output_folder}/mascara_perda.png")
+Image.fromarray((mascara_perda.astype(np.uint8) * 255)).save(f"{output_folder}/mascara_perda_filtrada.png")
 
 # === VISUALIZAÇÃO ===
 plt.figure(figsize=(15, 5))
