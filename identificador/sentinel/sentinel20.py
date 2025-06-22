@@ -6,6 +6,10 @@ from PIL import Image
 import os
 import pandas as pd
 
+# === CONFIGURAÇÃO DO SENTINEL HUB ===
+config = SHConfig()
+config.sh_client_id = ''
+config.sh_client_secret = ''
 
 # === LISTA DE COORDENADAS ===
 coordenadas = [
