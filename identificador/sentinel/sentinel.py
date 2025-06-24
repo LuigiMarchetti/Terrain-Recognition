@@ -8,11 +8,14 @@ from scipy.ndimage import binary_opening
 
 # === CONFIGURAÇÃO DO SENTINEL HUB ===
 config = SHConfig()
-config.sh_client_id = ''
-config.sh_client_secret = ''
+config.sh_client_id = '69b0e122-2c43-444c-a03a-11f80f0fa3f6'
+config.sh_client_secret = 'UzfLRBn4lWFxz9hypPOeWKxV4BW8LYsT'
 
 # Coordenada e área
-lat, lon = -26.90567708545667, -49.0556474962708
+#lat, lon = -26.90567708545667, -49.0556474962708
+#lat, lon = -26.96046686848641, -49.145220530125506
+#lat, lon = -26.65998286024152, -49.05780919068906
+lat, lon = -26.868825565055406, -49.16984456369647
 aoi = BBox([lon - 0.0050, lat - 0.0050, lon + 0.0050, lat + 0.0050], crs=CRS.WGS84)
 resolution = 10
 width, height = bbox_to_dimensions(aoi, resolution)

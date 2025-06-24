@@ -13,9 +13,14 @@ config.sh_client_secret = ''
 
 # === LISTA DE COORDENADAS ===
 coordenadas = [
-    (-26.90567708545667, -49.0556474962708),
+    #(-26.90567708545667, -49.0556474962708),
+    (-26.96046686848641, -49.145220530125506)
+    #(-26.868825565055406, -49.16984456369647)
     # adicione mais coordenadas aqui se quiser
 ]
+
+limiar_mascara_vegetacao = 0.4
+limiar_mascara_perda = -0.5
 
 hoje = date.today()
 tres_anos_atras = hoje - timedelta(days=3 * 365)
@@ -140,8 +145,8 @@ for idx, (lat, lon) in enumerate(coordenadas):
     rgb_passado_uint8 = np.clip(rgb_passado / np.max(rgb_passado) * 255, 0, 255).astype(np.uint8)
 
     delta_ndvi = ndvi_atual - ndvi_passado
-    mascara_veg = ndvi_passado > 0.4
-    mascara_perda = (delta_ndvi < -0.5) & mascara_veg
+    mascara_veg = ndvi_passado > limiar_mascara_vegetacao
+    mascara_perda = (delta_ndvi < limiar_mascara_perda) & mascara_veg
 
     pixels_validos = np.count_nonzero(mascara_veg)
     pixels_perda = np.count_nonzero(mascara_perda)
