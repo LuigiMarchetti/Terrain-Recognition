@@ -1,0 +1,39 @@
+# ARQUIVO DE COORDENADAS PARA MONITORAMENTO DE VEGETAÇÃO
+#
+# Formato: latitude;longitude;tamanho_janela;limiar_perda;data_limite
+#
+# PARÂMETROS:
+# - label: nome/rótulo do local (obrigatório, usado no nome da pasta)
+# - latitude: coordenada latitude em graus decimais (obrigatório)
+# - longitude: coordenada longitude em graus decimais (obrigatório)
+# - tamanho_janela: raio da área em graus (opcional, padrão: 0.0050 ≈ 500m)
+# - limiar_perda: threshold para detectar perda (opcional, padrão: -0.2)
+# - data_limite: data limite para busca (opcional, formatos: YYYY-MM-DD, DD/MM/YYYY, DD-MM-YYYY)
+#   * Se fornecida: compara imagem mais recente antes desta data com a mais recente atual
+#   * Se não fornecida: compara as 2 imagens mais recentes disponíveis
+#
+# NOTAS:
+# - Linhas iniciadas com # são comentários
+# - Valores opcionais podem ser deixados em branco
+# - Tamanho da janela: 0.0050 ≈ 500m, 0.0100 ≈ 1km, 0.0025 ≈ 250m
+# - Limiar de perda: valores mais negativos detectam perdas maiores
+#   -0.2 = mais sensível, -0.7 = menos sensível
+#
+# EXEMPLOS:
+
+# Ponto 1: Configuração completa - compara 2 imagens mais recentes
+Ponta Aguda - Morro República Argentina;-26.90567708545667;-49.0556474962708;0.0050;-0.2;
+
+# Ponto 2: Compara com data limite específica (formato ISO)
+Velha Grande - Sitio Pra la do Toco;-26.96046686848641;-49.145220530125506;;;2023-12-31
+
+# Ponto 3: Área maior, mais sensível, com data limite (formato brasileiro)
+Testo Salto - R. Ribeirão Schelters;-26.868825565055406;-49.16984456369647;0.0050;-0.3;31/12/2023
+
+# Ponto 4: Área menor, menos sensível, com data limite (formato DD-MM-YYYY)
+Itoupavazinha - R. Luiz Maske;-26.846305514170737;-49.11930082624259;0.0025;-0.7;31-12-2023
+
+# Ponto 5: Apenas coordenadas (usa todos os padrões - 2 imagens mais recentes)
+Salto Norte - R. Tapajós;-26.881681803991707;-49.11573413653337;;;31-12-2023
+
+# Adicione suas coordenadas abaixo:
