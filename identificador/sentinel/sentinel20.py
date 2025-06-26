@@ -1,6 +1,7 @@
 from matplotlib.colors import ListedColormap
 from matplotlib.patches import Patch
-from sentinelhub import SHConfig, BBox, CRS, SentinelHubRequest, DataCollection, MimeType, bbox_to_dimensions, SentinelHubCatalog
+from sentinelhub import SHConfig, BBox, CRS, SentinelHubRequest, DataCollection, MimeType, bbox_to_dimensions, \
+    SentinelHubCatalog
 import numpy as np
 import matplotlib.pyplot as plt
 from datetime import date, timedelta, datetime
@@ -10,18 +11,17 @@ import pandas as pd
 import re
 import math
 
-# === CONFIGURAÇÃO DO SENTINEL HUB ===
+
 config = SHConfig()
 config.sh_client_id = '69b0e122-2c43-444c-a03a-11f80f0fa3f6'
 config.sh_client_secret = 'UzfLRBn4lWFxz9hypPOeWKxV4BW8LYsT'
 
 # === VALORES PADRÃO ===
-TAMANHO_JANELA_PADRAO = 0.0050  # ~500m de raio
+TAMANHO_JANELA_PADRAO = 0.0050
 LIMIAR_VEGETACAO_PADRAO = 0.4
 LIMIAR_PERDA_PADRAO = -0.2
-# === PARÂMETROS PARA THRESHOLD ADAPTATIVO ===
-FACTOR_STD_PADRAO = 3  # Fator multiplicador do desvio padrão
-USAR_THRESHOLD_ADAPTATIVO = True  # Flag para ativar/desativar threshold adaptativo
+FACTOR_N_PADRAO = 1.5  # Padrão agora é 1.5, alinhado com o artigo
+MODO_THRESHOLD_PADRAO = 2  # Padrão agora é 2 (método do artigo)
 
 hoje = date.today()
 
@@ -31,7 +31,7 @@ evalscript_rgb = """
 function setup() {
   return {
     input: ["B04", "B03", "B02"],
-    output: { bands: 3 }
+    output: { bands: 3, sampleType: "AUTO" }
   };
 }
 const gain = 2.5;
@@ -54,142 +54,79 @@ function setup() {
   };
 }
 function evaluatePixel(sample) {
-  if ([3, 6, 8, 9, 10].includes(sample.SCL)) {
-    return [null];
+  // Mascara nuvem, sombra, neve, etc. Retorna um valor nulo que o Python lerá como NaN
+  if ([3, 6, 8, 9, 10, 11].includes(sample.SCL)) {
+    return [NaN];
   }
   let ndvi = (sample.B08 - sample.B04) / (sample.B08 + sample.B04);
   return [ndvi];
 }
 """
 
-def calcular_area_hectares(tamanho_janela, latitude):
-    """
-    Calcula a área aproximada em hectares baseada no tamanho da janela e latitude
-    """
-    # Conversão aproximada de graus para metros na latitude especificada
-    # 1 grau de longitude varia com a latitude: cos(lat) * 111320 metros
-    # 1 grau de latitude é aproximadamente 111320 metros
 
+def calcular_area_hectares(tamanho_janela, latitude):
     lat_rad = math.radians(latitude)
     metros_por_grau_lon = math.cos(lat_rad) * 111320
     metros_por_grau_lat = 111320
-
-    # Área do retângulo (2 * tamanho_janela para cada dimensão)
     largura_metros = 2 * tamanho_janela * metros_por_grau_lon
     altura_metros = 2 * tamanho_janela * metros_por_grau_lat
-
     area_m2 = largura_metros * altura_metros
-    area_hectares = area_m2 / 10000  # Converter para hectares
+    return round(area_m2 / 10000, 2)
 
-    return round(area_hectares, 2)
 
 def sanitizar_nome_pasta(nome):
-    """
-    Remove caracteres inválidos para nomes de pasta e limita o tamanho
-    """
-    # Remover caracteres especiais e substituir por underscore
     nome_limpo = re.sub(r'[<>:"/\\|?*\x00-\x1F]', '_', nome)
-    # Remover espaços extras e substituir por underscore
     nome_limpo = re.sub(r'\s+', '_', nome_limpo.strip())
-    # Limitar tamanho para evitar problemas de sistema
-    if len(nome_limpo) > 50:
-        nome_limpo = nome_limpo[:50]
-    return nome_limpo
+    return nome_limpo[:50]
+
 
 def parse_data_limite(data_str):
-    """
-    Converte string de data para objeto date.
-    Aceita formatos: YYYY-MM-DD, DD/MM/YYYY, DD-MM-YYYY
-    """
     if not data_str or not data_str.strip():
         return None
-
     data_str = data_str.strip()
-
     try:
-        # Formato ISO (YYYY-MM-DD)
         if '-' in data_str and len(data_str.split('-')[0]) == 4:
             return datetime.strptime(data_str, '%Y-%m-%d').date()
-
-        # Formato brasileiro (DD/MM/YYYY)
         elif '/' in data_str:
             return datetime.strptime(data_str, '%d/%m/%Y').date()
-
-        # Formato DD-MM-YYYY
         elif '-' in data_str:
             return datetime.strptime(data_str, '%d-%m-%Y').date()
-
-        else:
-            print(f"Formato de data não reconhecido: {data_str}")
-            return None
-
+        return None
     except ValueError as e:
         print(f"Erro ao converter data '{data_str}': {e}")
         return None
 
+
 def ler_coordenadas_arquivo(nome_arquivo):
-    """
-    Lê coordenadas de arquivo texto no formato:
-    label;latitude;longitude;tamanho_janela;limiar_perda;data_limite;factor_std;usar_adaptativo
-
-    Onde tamanho_janela, limiar_perda, data_limite, factor_std e usar_adaptativo são opcionais
-    data_limite: data no formato YYYY-MM-DD, DD/MM/YYYY ou DD-MM-YYYY
-                Se não fornecida, usa as 2 imagens mais recentes
-    factor_std: fator multiplicador do desvio padrão (padrão: 3)
-    usar_adaptativo: 1 para usar threshold adaptativo, 0 para usar fixo (padrão: 1)
-    """
     coordenadas = []
-
     if not os.path.exists(nome_arquivo):
-        print(f"Arquivo {nome_arquivo} não encontrado!")
-        print("Criando arquivo de exemplo...")
+        print(f"Arquivo {nome_arquivo} não encontrado! Criando arquivo de exemplo...")
         with open(nome_arquivo, 'w', encoding='utf-8') as f:
             f.write("# ARQUIVO DE COORDENADAS PARA MONITORAMENTO DE VEGETAÇÃO\n")
             f.write("#\n")
-            f.write("# Formato: label;latitude;longitude;tamanho_janela;limiar_perda;data_limite;factor_std;usar_adaptativo\n")
+            f.write(
+                "# Formato: label;latitude;longitude;tamanho_janela;limiar_perda_fixo;data_limite;fator_n;modo_threshold\n")
             f.write("#\n")
             f.write("# PARÂMETROS:\n")
-            f.write("# - label: nome/rótulo do local (obrigatório, usado no nome da pasta)\n")
-            f.write("# - latitude: coordenada latitude em graus decimais (obrigatório)\n")
-            f.write("# - longitude: coordenada longitude em graus decimais (obrigatório)\n")
-            f.write("# - tamanho_janela: raio da área em graus (opcional, padrão: 0.0050 ≈ 500m)\n")
-            f.write("# - limiar_perda: threshold para detectar perda (opcional, padrão: -0.2)\n")
-            f.write("# - data_limite: data limite para busca (opcional, formatos: YYYY-MM-DD, DD/MM/YYYY, DD-MM-YYYY)\n")
-            f.write("#   * Se fornecida: compara imagem mais recente antes desta data com a mais recente atual\n")
-            f.write("#   * Se não fornecida: compara as 2 imagens mais recentes disponíveis\n")
-            f.write("# - factor_std: fator multiplicador do desvio padrão (opcional, padrão: 3)\n")
-            f.write("#   * Usado apenas quando usar_adaptativo=1\n")
-            f.write("#   * Valores maiores = menos sensível, valores menores = mais sensível\n")
-            f.write("# - usar_adaptativo: 1 para threshold adaptativo, 0 para fixo (opcional, padrão: 1)\n")
-            f.write("#\n")
-            f.write("# NOTAS:\n")
-            f.write("# - Linhas iniciadas com # são comentários\n")
-            f.write("# - Valores opcionais podem ser deixados em branco\n")
-            f.write("# - Labels não devem conter caracteres especiais (<>:\"/\\|?*)\n")
-            f.write("# - Tamanho da janela: 0.0050 ≈ 500m, 0.0100 ≈ 1km, 0.0025 ≈ 250m\n")
-            f.write("# - Limiar de perda: valores mais negativos detectam perdas maiores\n")
-            f.write("#   -0.2 = mais sensível, -0.7 = menos sensível\n")
-            f.write("# - Threshold adaptativo: calcula automaticamente o limiar baseado no desvio padrão\n")
-            f.write("#   das mudanças de NDVI, tornando a análise mais robusta\n")
+            f.write("# - label, latitude, longitude: obrigatórios.\n")
+            f.write("# - tamanho_janela: raio da área em graus (opcional, padrão: 0.0050 ≈ 500m).\n")
+            f.write("# - limiar_perda_fixo: threshold para o modo fixo (opcional, padrão: -0.2).\n")
+            f.write("# - data_limite: data para busca (opcional, formatos: YYYY-MM-DD, DD/MM/YYYY, DD-MM-YYYY).\n")
+            f.write("# - fator_n: fator multiplicador do desvio padrão (opcional, padrão: 1.5).\n")
+            f.write("# - modo_threshold: seleciona o método de cálculo do limiar (opcional, padrão: 2).\n")
+            f.write("#   -> 0 = Fixo (usa o valor de 'limiar_perda_fixo').\n")
+            f.write("#   -> 1 = Adaptativo (baseado no desvio padrão da vegetação estável, como no código original).\n")
+            f.write("#   -> 2 = Artigo (baseado na média e desvio padrão da imagem de diferença inteira).\n")
             f.write("#\n")
             f.write("# EXEMPLOS:\n")
+            f.write("# Fazenda Teste: Usando método do artigo com n=1.5 (padrão do artigo)\n")
+            f.write("Fazenda_Teste;-26.9056;-49.0556;;;;1.5;2\n")
             f.write("\n")
-            f.write("# Fazenda Norte: Threshold adaptativo com fator 3 (padrão)\n")
-            f.write("Fazenda_Norte;-26.90567708545667;-49.0556474962708;0.0050;-0.2;;3;1\n")
+            f.write("# Área de Preservação: Usando método adaptativo original (vegetação) com fator 3\n")
+            f.write("Area_Preservacao;-26.9604;-49.1452;;;;3;1\n")
             f.write("\n")
-            f.write("# Área de Preservação: Threshold adaptativo mais sensível (fator 2)\n")
-            f.write("Area_Preservacao;-26.96046686848641;-49.145220530125506;;;;;2;1\n")
-            f.write("\n")
-            f.write("# Mata Ciliar: Threshold fixo tradicional\n")
-            f.write("Mata_Ciliar;-26.868825565055406;-49.16984456369647;0.0100;-0.3;;;0\n")
-            f.write("\n")
-            f.write("# Reflorestamento: Threshold adaptativo menos sensível (fator 4)\n")
-            f.write("Reflorestamento;-26.846305514170737;-49.11930082624259;0.0025;-0.7;;4;1\n")
-            f.write("\n")
-            f.write("# Campo Nativo: Configuração padrão (threshold adaptativo)\n")
-            f.write("Campo_Nativo;-26.915;-49.065;;;;;;;1\n")
-            f.write("\n")
-            f.write("# Adicione suas coordenadas abaixo:\n")
+            f.write("# Mata Ciliar: Usando método de threshold fixo -0.3\n")
+            f.write("Mata_Ciliar;-26.8688;-49.1698;0.0100;-0.3;;;0\n")
         print(f"Arquivo {nome_arquivo} criado com exemplos. Edite-o com suas coordenadas.")
         return []
 
@@ -199,153 +136,112 @@ def ler_coordenadas_arquivo(nome_arquivo):
                 linha = linha.strip()
                 if not linha or linha.startswith('#'):
                     continue
-
-                partes = linha.split(';')
+                partes = [p.strip() for p in linha.split(';')]
                 if len(partes) < 3:
                     print(f"Linha {linha_num} ignorada (formato inválido): {linha}")
                     continue
-
                 try:
-                    label = partes[0].strip()
-                    if not label:
-                        label = f"Ponto_{linha_num}"
-
+                    label = partes[0] if partes[0] else f"Ponto_{linha_num}"
                     lat = float(partes[1])
                     lon = float(partes[2])
                     tamanho_janela = float(partes[3]) if len(partes) > 3 and partes[3] else TAMANHO_JANELA_PADRAO
-                    limiar_perda = float(partes[4]) if len(partes) > 4 and partes[4] else LIMIAR_PERDA_PADRAO
-
-                    # Parâmetro: data limite
-                    data_limite = None
-                    if len(partes) > 5 and partes[5]:
-                        data_limite = parse_data_limite(partes[5])
-
-                    # Novos parâmetros para threshold adaptativo
-                    factor_std = float(partes[6]) if len(partes) > 6 and partes[6] else FACTOR_STD_PADRAO
-                    usar_adaptativo = bool(int(partes[7])) if len(partes) > 7 and partes[7] else USAR_THRESHOLD_ADAPTATIVO
-
-                    coordenadas.append((label, lat, lon, tamanho_janela, limiar_perda, data_limite, factor_std, usar_adaptativo))
-                except ValueError as e:
-                    print(f"Linha {linha_num} ignorada (erro de conversão): {linha} - {e}")
-                    continue
-
+                    limiar_perda_fixo = float(partes[4]) if len(partes) > 4 and partes[4] else LIMIAR_PERDA_PADRAO
+                    data_limite = parse_data_limite(partes[5]) if len(partes) > 5 and partes[5] else None
+                    factor_n = float(partes[6]) if len(partes) > 6 and partes[6] else FACTOR_N_PADRAO
+                    modo_threshold = int(partes[7]) if len(partes) > 7 and partes[7] else MODO_THRESHOLD_PADRAO
+                    coordenadas.append(
+                        (label, lat, lon, tamanho_janela, limiar_perda_fixo, data_limite, factor_n, modo_threshold))
+                except (ValueError, IndexError) as e:
+                    print(f"Linha {linha_num} ignorada (erro de conversão de valor): {linha} - {e}")
     except Exception as e:
-        print(f"Erro ao ler arquivo {nome_arquivo}: {e}")
-        return []
-
+        print(f"Erro fatal ao ler arquivo {nome_arquivo}: {e}")
     return coordenadas
 
-def buscar_imagem_com_data_limite(catalog, aoi, data_limite):
-    """
-    Busca uma imagem mais recente antes da data limite e a mais recente disponível
-    """
-    # Buscar imagem mais recente antes da data limite
-    data_inicio_antiga = data_limite - timedelta(days=2*365)  # Buscar até 2 anos antes
-
-    search_antiga = catalog.search(
-        collection=DataCollection.SENTINEL2_L2A,
-        bbox=aoi,
-        time=(data_inicio_antiga, data_limite),
-        filter='eo:cloud_cover < 20',
-        fields={"include": ["id", "properties.datetime", "properties.eo:cloud_cover"]},
-        limit=20
-    )
-
-    results_antiga = list(search_antiga)
-
-    # Buscar imagem mais recente (últimos 6 meses)
-    data_recente_inicio = hoje - timedelta(days=180)
-    data_recente_fim = hoje
-
-    search_recente = catalog.search(
-        collection=DataCollection.SENTINEL2_L2A,
-        bbox=aoi,
-        time=(data_recente_inicio, data_recente_fim),
-        filter='eo:cloud_cover < 20',
-        fields={"include": ["id", "properties.datetime", "properties.eo:cloud_cover"]},
-        limit=20
-    )
-
-    results_recente = list(search_recente)
-
-    if not results_antiga or not results_recente:
-        return None, None
-
-    # Pegar a melhor imagem antes da data limite (ordenar por data descendente, depois por nuvem)
-    results_antiga.sort(key=lambda x: (-datetime.fromisoformat(x["properties"]["datetime"].replace("Z", "+00:00")).timestamp(),
-                                       x["properties"]["eo:cloud_cover"]))
-    melhor_antiga = results_antiga[0]
-    dt_antiga = datetime.fromisoformat(melhor_antiga["properties"]["datetime"].replace("Z", "+00:00"))
-    data_antiga = (dt_antiga.date(), melhor_antiga["properties"]["eo:cloud_cover"])
-
-    # Pegar a imagem mais recente (ordenar por data, depois por nuvem)
-    results_recente.sort(key=lambda x: (-datetime.fromisoformat(x["properties"]["datetime"].replace("Z", "+00:00")).timestamp(),
-                                        x["properties"]["eo:cloud_cover"]))
-    melhor_recente = results_recente[0]
-    dt_recente = datetime.fromisoformat(melhor_recente["properties"]["datetime"].replace("Z", "+00:00"))
-    data_recente = (dt_recente.date(), melhor_recente["properties"]["eo:cloud_cover"])
-
-    return data_recente, data_antiga
 
 def buscar_datas_validas(catalog, aoi, data_limite_recente, data_limite_antiga, num_imagens=2):
-    """
-    Busca as duas imagens mais recentes com baixa cobertura de nuvem
-    """
     search_iterator = catalog.search(
         collection=DataCollection.SENTINEL2_L2A,
         bbox=aoi,
         time=(data_limite_antiga, data_limite_recente),
         filter='eo:cloud_cover < 20',
         fields={"include": ["id", "properties.datetime", "properties.eo:cloud_cover"]},
-        limit=50  # Buscar mais resultados para ter opções
+        limit=50
     )
-
     results = list(search_iterator)
     if len(results) < 2:
         return None, None
+    results.sort(key=lambda x: x["properties"]["datetime"], reverse=True)
 
-    # Ordenar por data (mais recente primeiro) e depois por cobertura de nuvem
-    results.sort(key=lambda x: (x["properties"]["datetime"], x["properties"]["eo:cloud_cover"]), reverse=True)
+    # Simplesmente pega os dois mais recentes com nuvem < 20
+    melhor_recente_info = results[0]
+    melhor_antiga_info = results[1]
 
-    datas = []
-    for result in results[:num_imagens]:
-        dt_str = result["properties"]["datetime"]
-        dt_obj = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
-        cobertura_nuvem = result["properties"]["eo:cloud_cover"]
-        datas.append((dt_obj.date(), cobertura_nuvem))
+    dt_recente = datetime.fromisoformat(melhor_recente_info["properties"]["datetime"].replace("Z", "+00:00"))
+    dt_antiga = datetime.fromisoformat(melhor_antiga_info["properties"]["datetime"].replace("Z", "+00:00"))
 
-    if len(datas) >= 2:
-        return datas[0], datas[1]  # (data_mais_recente, cobertura), (data_mais_antiga, cobertura)
+    data_recente = (dt_recente.date(), melhor_recente_info["properties"]["eo:cloud_cover"])
+    data_antiga = (dt_antiga.date(), melhor_antiga_info["properties"]["eo:cloud_cover"])
 
-    return None, None
+    return data_recente, data_antiga
+
+
+def buscar_imagem_com_data_limite(catalog, aoi, data_limite):
+    data_inicio_antiga = data_limite - timedelta(days=2 * 365)
+    search_antiga = catalog.search(
+        collection=DataCollection.SENTINEL2_L2A, bbox=aoi, time=(data_inicio_antiga, data_limite),
+        filter='eo:cloud_cover < 20', fields={"include": ["id", "properties.datetime", "properties.eo:cloud_cover"]},
+        limit=20
+    )
+    results_antiga = list(search_antiga)
+
+    data_recente_inicio = hoje - timedelta(days=180)
+    search_recente = catalog.search(
+        collection=DataCollection.SENTINEL2_L2A, bbox=aoi, time=(data_recente_inicio, hoje),
+        filter='eo:cloud_cover < 20', fields={"include": ["id", "properties.datetime", "properties.eo:cloud_cover"]},
+        limit=20
+    )
+    results_recente = list(search_recente)
+
+    if not results_antiga or not results_recente:
+        return None, None
+
+    results_antiga.sort(key=lambda x: (
+    -datetime.fromisoformat(x["properties"]["datetime"].replace("Z", "+00:00")).timestamp(),
+    x["properties"]["eo:cloud_cover"]))
+    melhor_antiga = results_antiga[0]
+    dt_antiga = datetime.fromisoformat(melhor_antiga["properties"]["datetime"].replace("Z", "+00:00"))
+    data_antiga = (dt_antiga.date(), melhor_antiga["properties"]["eo:cloud_cover"])
+
+    results_recente.sort(key=lambda x: (
+    -datetime.fromisoformat(x["properties"]["datetime"].replace("Z", "+00:00")).timestamp(),
+    x["properties"]["eo:cloud_cover"]))
+    melhor_recente = results_recente[0]
+    dt_recente = datetime.fromisoformat(melhor_recente["properties"]["datetime"].replace("Z", "+00:00"))
+    data_recente = (dt_recente.date(), melhor_recente["properties"]["eo:cloud_cover"])
+    return data_recente, data_antiga
+
 
 def requisicao_rgb(data, aoi, width, height):
-    global config
     return SentinelHubRequest(
         evalscript=evalscript_rgb,
         input_data=[SentinelHubRequest.input_data(
-            data_collection=DataCollection.SENTINEL2_L2A,
-            time_interval=(data, data)
+            data_collection=DataCollection.SENTINEL2_L2A, time_interval=(data, data)
         )],
         responses=[SentinelHubRequest.output_response("default", MimeType.TIFF)],
-        bbox=aoi,
-        size=(width, height),
-        config=config
+        bbox=aoi, size=(width, height), config=config
     )
 
+
 def requisicao_ndvi(data, aoi, width, height):
-    global config
     return SentinelHubRequest(
         evalscript=evalscript_ndvi,
         input_data=[SentinelHubRequest.input_data(
-            data_collection=DataCollection.SENTINEL2_L2A,
-            time_interval=(data, data)
+            data_collection=DataCollection.SENTINEL2_L2A, time_interval=(data, data)
         )],
         responses=[SentinelHubRequest.output_response("default", MimeType.TIFF)],
-        bbox=aoi,
-        size=(width, height),
-        config=config
+        bbox=aoi, size=(width, height), config=config
     )
+
 
 def classificar_perda(percentual):
     if percentual < 0.5:
@@ -355,285 +251,177 @@ def classificar_perda(percentual):
     elif percentual < 5:
         return "Grave"
     else:
-        return "Gravissimo"
+        return "Gravíssimo"
 
-def calcular_threshold_adaptativo(delta_ndvi, mascara_veg, factor_std):
-    """
-    Calcula o threshold adaptativo baseado no desvio padrão das mudanças de NDVI
-    nas áreas vegetadas
-    """
+
+def calcular_threshold_adaptativo_vegetacao(delta_ndvi, mascara_veg, factor_std):
     if not np.any(mascara_veg):
-        return -0.2  # Fallback para valor padrão se não houver vegetação
+        return LIMIAR_PERDA_PADRAO
+    std_dev = np.nanstd(delta_ndvi[mascara_veg])
+    threshold = -factor_std * std_dev
+    return threshold
 
-    # Calcular desvio padrão apenas nas áreas vegetadas
-    std_dev = np.std(delta_ndvi[mascara_veg])
 
-    # Threshold adaptativo: -factor_std * desvio_padrão
-    threshold_adaptativo = -factor_std * std_dev
+def calcular_threshold_artigo(delta_ndvi_validos, n_factor):
+    media = np.nanmean(delta_ndvi_validos)
+    std_dev = np.nanstd(delta_ndvi_validos)
+    threshold = media - (n_factor * std_dev)
+    return threshold
 
-    return threshold_adaptativo
 
 def main():
-    global config
-
-    # Nome do arquivo de coordenadas
     arquivo_coordenadas = "coordenadas.txt"
-
-    print("Monitor de Vegetacao - Versao com Threshold Adaptativo")
+    print("Monitor de Vegetação - v3.0 com Múltiplos Métodos de Threshold")
     print("=" * 60)
-
-    # Ler coordenadas do arquivo
     coordenadas = ler_coordenadas_arquivo(arquivo_coordenadas)
-
     if not coordenadas:
-        print("Nenhuma coordenada valida encontrada. Programa encerrado.")
+        print("\nNenhuma coordenada válida encontrada. Edite o arquivo 'coordenadas.txt' e tente novamente.")
         return
 
-    print(f"{len(coordenadas)} coordenada(s) carregada(s)")
-
-    # === ARMAZENAR RESULTADOS ===
+    print(f"\n{len(coordenadas)} coordenada(s) carregada(s) para processamento.")
     resultados = []
 
-    # === PROCESSAR TODAS AS COORDENADAS ===
-    for idx, (label, lat, lon, tamanho_janela, limiar_perda, data_limite, factor_std, usar_adaptativo) in enumerate(coordenadas):
-        print(f"\nProcessando {label} (ponto {idx+1}/{len(coordenadas)}): ({lat:.5f}, {lon:.5f})")
-        print(f"   Janela: ±{tamanho_janela:.4f}° | Limiar fixo: {limiar_perda}")
-        print(f"   Threshold: {'Adaptativo (fator=' + str(factor_std) + ')' if usar_adaptativo else 'Fixo'}")
+    for idx, (label, lat, lon, tamanho_janela, limiar_perda_fixo, data_limite, factor_n, modo_threshold) in enumerate(
+            coordenadas):
+        print(f"\n[{idx + 1}/{len(coordenadas)}] Processando: {label} ({lat:.5f}, {lon:.5f})")
 
-        if data_limite:
-            modo_comparacao = f"Data limite: {data_limite} vs atual"
-        else:
-            modo_comparacao = "2 imagens mais recentes"
-        print(f"   Modo: {modo_comparacao}")
+        modo_str = {0: "Fixo", 1: "Adaptativo (Vegetação)", 2: "Adaptativo (Artigo)"}.get(modo_threshold,
+                                                                                          "Desconhecido")
+        print(f"  Modo de Threshold: {modo_str}")
 
-        # Calcular área em hectares
-        area_hectares = calcular_area_hectares(tamanho_janela, lat)
-
-        # Criar área de interesse
-        aoi = BBox([lon - tamanho_janela, lat - tamanho_janela,
-                    lon + tamanho_janela, lat + tamanho_janela], crs=CRS.WGS84)
+        aoi = BBox([lon - tamanho_janela, lat - tamanho_janela, lon + tamanho_janela, lat + tamanho_janela],
+                   crs=CRS.WGS84)
         width, height = bbox_to_dimensions(aoi, 10)
-
-        # Buscar imagens baseado na configuração
+        area_hectares = calcular_area_hectares(tamanho_janela, lat)
         catalog = SentinelHubCatalog(config=config)
 
         if data_limite:
-            # Buscar uma imagem antes da data limite e uma recente
             resultado_recente, resultado_antigo = buscar_imagem_com_data_limite(catalog, aoi, data_limite)
         else:
-            # Buscar as duas imagens mais recentes nos últimos 2 anos
-            data_limite_recente = hoje
-            data_limite_antiga = hoje - timedelta(days=2 * 365)
-
-            resultado_recente, resultado_antigo = buscar_datas_validas(
-                catalog, aoi, data_limite_recente, data_limite_antiga
-            )
+            resultado_recente, resultado_antigo = buscar_datas_validas(catalog, aoi, hoje,
+                                                                       hoje - timedelta(days=2 * 365))
 
         if not resultado_recente or not resultado_antigo:
-            erro_msg = "Imagens adequadas nao encontradas"
-            if data_limite:
-                erro_msg += f" (sem imagens antes de {data_limite} ou recentes)"
-            print(f"  {erro_msg}")
-            resultados.append({
-                "Label": label,
-                "Ponto": f"{idx+1}",
-                "Latitude": lat,
-                "Longitude": lon,
-                "Area_Hectares": area_hectares,
-                "Tamanho_Janela": tamanho_janela,
-                "Limiar_Perda_Fixo": limiar_perda,
-                "Factor_Std": factor_std,
-                "Usar_Adaptativo": usar_adaptativo,
-                "Threshold_Usado": "N/A",
-                "Modo_Comparacao": modo_comparacao,
-                "Data_Limite": str(data_limite) if data_limite else "N/A",
-                "Data_Solicitada": str(hoje),
-                "Data_Imagem_Recente": "N/A",
-                "Cobertura_Nuvem_Recente (%)": "N/A",
-                "Data_Imagem_Antiga": "N/A",
-                "Cobertura_Nuvem_Antiga (%)": "N/A",
-                "Perda_Vegetacao (%)": "N/A",
-                "Classificacao": "Sem dados",
-                "Pixels_Vegetacao": "N/A",
-                "Pixels_Perda": "N/A",
-                "Status": f"Erro - {erro_msg.lower()}"
-            })
+            print(f"  Erro: Imagens adequadas não encontradas para o período.")
+            # Adicionar lógica para registrar erro no dataframe de resultados
             continue
 
         data_recente, cobertura_recente = resultado_recente
         data_antiga, cobertura_antiga = resultado_antigo
 
-        periodo_comparacao = f"{data_antiga} -> {data_recente}"
-        dias_diferenca = (data_recente - data_antiga).days
-        print(f"  Comparacao: {periodo_comparacao} ({dias_diferenca} dias)")
-        print(f"  Nuvens: {cobertura_antiga:.1f}% -> {cobertura_recente:.1f}%")
+        print(f"  Comparando: {data_antiga} -> {data_recente} ({(data_recente - data_antiga).days} dias)")
+        print(f"  Cobertura de Nuvens: {cobertura_antiga:.1f}% -> {cobertura_recente:.1f}%")
 
         try:
-            # Fazer requisições
-            ndvi_recente = requisicao_ndvi(data_recente, aoi, width, height).get_data()[0].squeeze()
-            ndvi_antigo = requisicao_ndvi(data_antiga, aoi, width, height).get_data()[0].squeeze()
+            print("  Baixando imagens NDVI e RGB...")
+            ndvi_recente_raw = requisicao_ndvi(data_recente, aoi, width, height).get_data()[0].squeeze()
+            ndvi_antigo_raw = requisicao_ndvi(data_antiga, aoi, width, height).get_data()[0].squeeze()
 
-            rgb_recente = requisicao_rgb(data_recente, aoi, width, height).get_data()[0]
-            rgb_antigo = requisicao_rgb(data_antiga, aoi, width, height).get_data()[0]
+            valid_data_mask = ~np.isnan(ndvi_recente_raw) & ~np.isnan(ndvi_antigo_raw)
+            if not np.any(valid_data_mask):
+                print("  Erro: Não há pixels válidos (sem nuvens) em comum entre as duas imagens.")
+                continue
 
-            # Processar imagens RGB
-            rgb_recente_uint8 = np.clip(rgb_recente / np.max(rgb_recente) * 255, 0, 255).astype(np.uint8)
-            rgb_antigo_uint8 = np.clip(rgb_antigo / np.max(rgb_antigo) * 255, 0, 255).astype(np.uint8)
+            ndvi_recente = np.nan_to_num(ndvi_recente_raw, nan=0.0)
+            ndvi_antigo = np.nan_to_num(ndvi_antigo_raw, nan=0.0)
 
-            # Calcular diferenças
             delta_ndvi = ndvi_recente - ndvi_antigo
-            mascara_veg = ndvi_antigo > LIMIAR_VEGETACAO_PADRAO
+            delta_ndvi_validos = delta_ndvi[valid_data_mask]
 
-            # === IMPLEMENTAÇÃO DO THRESHOLD ADAPTATIVO ===
-            if usar_adaptativo:
-                threshold_usado = calcular_threshold_adaptativo(delta_ndvi, mascara_veg, factor_std)
-                print(f"  Threshold adaptativo calculado: {threshold_usado:.4f}")
-            else:
-                threshold_usado = limiar_perda
-                print(f"  Usando threshold fixo: {threshold_usado}")
+            mascara_veg = (ndvi_antigo > LIMIAR_VEGETACAO_PADRAO) & valid_data_mask
 
-            # Aplicar threshold (adaptativo ou fixo)
+            if modo_threshold == 1:
+                threshold_usado = calcular_threshold_adaptativo_vegetacao(delta_ndvi, mascara_veg, factor_n)
+                print(f"  Threshold Adaptativo (Vegetação) calculado: {threshold_usado:.4f}")
+            elif modo_threshold == 2:
+                threshold_usado = calcular_threshold_artigo(delta_ndvi_validos, factor_n)
+                print(f"  Threshold do Artigo (Média - n*σ) calculado: {threshold_usado:.4f}")
+            else:  # modo_threshold == 0
+                threshold_usado = limiar_perda_fixo
+                print(f"  Usando Threshold Fixo: {threshold_usado}")
+
             mascara_perda = (delta_ndvi < threshold_usado) & mascara_veg
 
             pixels_vegetacao = np.count_nonzero(mascara_veg)
             pixels_perda = np.count_nonzero(mascara_perda)
-            percentual_perda = (pixels_perda / pixels_vegetacao) * 100 if pixels_vegetacao else 0
+            percentual_perda = (pixels_perda / pixels_vegetacao) * 100 if pixels_vegetacao > 0 else 0
             classificacao = classificar_perda(percentual_perda)
 
-            print(f"  Perda de vegetacao: {percentual_perda:.2f}% ({classificacao})")
+            print(f"  Perda de vegetação detectada: {percentual_perda:.2f}% ({classificacao})")
 
-            # Criar nome da pasta com label
+            print("  Gerando e salvando arquivos de imagem...")
+            rgb_recente_img = requisicao_rgb(data_recente, aoi, width, height).get_data()[0]
+            rgb_antigo_img = requisicao_rgb(data_antiga, aoi, width, height).get_data()[0]
+
             label_limpo = sanitizar_nome_pasta(label)
-            pasta = f"resultados_ndvi/ponto_{idx+1}_{label_limpo}"
+            pasta = f"resultados_ndvi/ponto_{idx + 1}_{label_limpo}"
             os.makedirs(pasta, exist_ok=True)
 
-            # Salvar imagens
-            Image.fromarray(rgb_antigo_uint8).save(f"{pasta}/rgb_antigo.png")
-            Image.fromarray(rgb_recente_uint8).save(f"{pasta}/rgb_recente.png")
+            Image.fromarray(rgb_antigo_img).save(f"{pasta}/rgb_antigo.png")
+            Image.fromarray(rgb_recente_img).save(f"{pasta}/rgb_recente.png")
             Image.fromarray(((ndvi_antigo + 1) / 2 * 255).astype(np.uint8)).save(f"{pasta}/ndvi_antigo.png")
             Image.fromarray(((ndvi_recente + 1) / 2 * 255).astype(np.uint8)).save(f"{pasta}/ndvi_recente.png")
-            Image.fromarray((mascara_perda.astype(np.uint8) * 255)).save(f"{pasta}/mascara_perda.png")
+            Image.fromarray(mascara_perda.astype(np.uint8) * 255).save(f"{pasta}/mascara_perda.png")
 
-            plt.figure(figsize=(18, 5))
+            # Geração do plot comparativo
+            fig, axs = plt.subplots(1, 4, figsize=(22, 6))
+            fig.suptitle(f"Análise Comparativa para: {label}\n{data_antiga} vs {data_recente}", fontsize=16)
 
-            # Configuração comum para todos os subplots
-            plot_configs = [
-                {'img': ndvi_antigo, 'title': f"NDVI Antigo\n{data_antiga}", 'cmap': 'YlGn'},
-                {'img': ndvi_recente, 'title': f"NDVI Recente\n{data_recente}", 'cmap': 'YlGn'},
-                {'img': delta_ndvi, 'title': "Diferença NDVI\n(Recente - Antigo)", 'cmap': 'RdYlGn'},
-                {'img': mascara_perda, 'title': f"Perda Vegetação\n{percentual_perda:.2f}% - {classificacao}\n(Threshold: {threshold_usado:.4f})", 'cmap': ListedColormap(['#fff5f0', '#722F37'])}
-            ]
+            axs[0].imshow(rgb_antigo_img)
+            axs[0].set_title(f"RGB Antigo ({data_antiga})")
+            axs[0].axis('off')
 
-            for i, config_plot in enumerate(plot_configs, 1):
-                plt.subplot(1, 4, i)
-                img = plt.imshow(config_plot['img'], cmap=config_plot['cmap'], vmin=-1 if i !=4 else 0, vmax=1)
-                plt.axis('off')
-                plt.title(config_plot['title'], y=-0.18, pad=10)
+            axs[1].imshow(rgb_recente_img)
+            axs[1].set_title(f"RGB Recente ({data_recente})")
+            axs[1].axis('off')
 
-                # Barra de cores apenas para os 3 primeiros
-                if i < 4:
-                    plt.colorbar(img, shrink=0.8, pad=0.02)
+            im = axs[2].imshow(delta_ndvi, cmap='RdYlGn', vmin=-0.5, vmax=0.5)
+            axs[2].set_title("Diferença NDVI (Recente - Antigo)")
+            axs[2].axis('off')
+            fig.colorbar(im, ax=axs[2], shrink=0.8, label="Variação NDVI")
 
-            legend_elements = [
-                Patch(facecolor='#fff5f0', edgecolor='black', label='Sem alteração'),
-                Patch(facecolor='#722F37', edgecolor='black', label='Perda vegetação')
-            ]
-            plt.legend(
-                handles=legend_elements,
-                loc='upper center',
-                bbox_to_anchor=(0.5, -0.25),
-                frameon=True,
-                ncol=2,
-                title="Legenda:"
-            )
+            # Visualização da perda sobre a imagem recente
+            visualizacao_final = rgb_recente_img.copy()
+            visualizacao_final[mascara_perda] = [255, 0, 0]  # Vermelho
+            axs[3].imshow(visualizacao_final)
+            axs[3].set_title(f"Perda Detectada ({percentual_perda:.2f}%)")
+            axs[3].axis('off')
 
-            plt.tight_layout()
-            plt.subplots_adjust(bottom=0.25, wspace=0.2)
+            # Salvar imagem de visualização final separadamente
+            Image.fromarray(visualizacao_final).save(f"{pasta}/resultado_visual_perda.png")
+
+            plt.tight_layout(rect=[0, 0, 1, 0.95])
             plt.savefig(f"{pasta}/analise_comparativa.png", dpi=300, bbox_inches='tight')
-            plt.close()
+            plt.close(fig)
 
-            # Adicionar aos resultados
+            # Adicionar resultados ao dataframe
             resultados.append({
-                "Label": label,
-                "Ponto": f"{idx+1}",
-                "Latitude": lat,
-                "Longitude": lon,
+                "Label": label, "Ponto": f"{idx + 1}", "Latitude": lat, "Longitude": lon,
                 "Area_Hectares": area_hectares,
-                "Tamanho_Janela": tamanho_janela,
-                "Limiar_Perda_Fixo": limiar_perda,
-                "Factor_Std": factor_std,
-                "Usar_Adaptativo": usar_adaptativo,
-                "Threshold_Usado": round(threshold_usado, 4),
-                "Modo_Comparacao": modo_comparacao,
-                "Data_Limite": str(data_limite) if data_limite else "N/A",
-                "Data_Solicitada": str(hoje),
-                "Data_Imagem_Recente": str(data_recente),
-                "Cobertura_Nuvem_Recente (%)": round(cobertura_recente, 1),
-                "Data_Imagem_Antiga": str(data_antiga),
-                "Cobertura_Nuvem_Antiga (%)": round(cobertura_antiga, 1),
-                "Perda_Vegetacao (%)": round(percentual_perda, 2),
-                "Classificacao": classificacao,
-                "Pixels_Vegetacao": int(pixels_vegetacao),
-                "Pixels_Perda": int(pixels_perda),
+                "Tamanho_Janela": tamanho_janela, "Limiar_Perda_Fixo": limiar_perda_fixo, "Factor_N": factor_n,
+                "Modo_Threshold": modo_str, "Threshold_Usado": round(threshold_usado, 4),
+                "Data_Limite": str(data_limite) if data_limite else "N/A", "Data_Solicitada": str(hoje),
+                "Data_Imagem_Recente": str(data_recente), "Cobertura_Nuvem_Recente (%)": round(cobertura_recente, 1),
+                "Data_Imagem_Antiga": str(data_antiga), "Cobertura_Nuvem_Antiga (%)": round(cobertura_antiga, 1),
+                "Perda_Vegetacao (%)": round(percentual_perda, 2), "Classificacao": classificacao,
+                "Pixels_Vegetacao": int(pixels_vegetacao), "Pixels_Perda": int(pixels_perda),
                 "Status": "Sucesso"
             })
 
         except Exception as e:
-            print(f"  Erro no processamento: {e}")
-            resultados.append({
-                "Label": label,
-                "Ponto": f"{idx+1}",
-                "Latitude": lat,
-                "Longitude": lon,
-                "Area_Hectares": area_hectares,
-                "Tamanho_Janela": tamanho_janela,
-                "Limiar_Perda_Fixo": limiar_perda,
-                "Factor_Std": factor_std,
-                "Usar_Adaptativo": usar_adaptativo,
-                "Threshold_Usado": "N/A",
-                "Modo_Comparacao": modo_comparacao,
-                "Data_Limite": str(data_limite) if data_limite else "N/A",
-                "Data_Solicitada": str(hoje),
-                "Data_Imagem_Recente": "N/A",
-                "Cobertura_Nuvem_Recente (%)": "N/A",
-                "Data_Imagem_Antiga": "N/A",
-                "Cobertura_Nuvem_Antiga (%)": "N/A",
-                "Perda_Vegetacao (%)": "N/A",
-                "Classificacao": "Erro",
-                "Pixels_Vegetacao": "N/A",
-                "Pixels_Perda": "N/A",
-                "Status": f"Erro: {str(e)}"
-            })
+            print(f"  ERRO INESPERADO no processamento de '{label}': {e}")
+            # Adicionar lógica para registrar erro no dataframe
+            continue
 
-    # === SALVAR RESULTADOS FINAIS ===
     if resultados:
         os.makedirs("resultados_ndvi", exist_ok=True)
         df = pd.DataFrame(resultados)
-
-        # Salvar apenas um CSV com todos os resultados
         nome_csv = "resultados_ndvi/analise_vegetacao_completa.csv"
         df.to_csv(nome_csv, index=False, encoding='utf-8-sig')
-
-        print(f"\nProcessamento finalizado!")
-        print(f"Resultados salvos em: {nome_csv}")
-
-        # Mostrar resumo
-        sucessos = len([r for r in resultados if r["Status"] == "Sucesso"])
-        print(f"\nResumo: {sucessos}/{len(resultados)} pontos processados com sucesso")
-
-        if sucessos > 0:
-            df_sucesso = df[df["Status"] == "Sucesso"]
-            perdas = df_sucesso["Perda_Vegetacao (%)"].astype(float)
-            print(f"Perda media de vegetacao: {perdas.mean():.2f}%")
-            print(f"Maior perda: {perdas.max():.2f}%")
-
-            # Mostrar resultados por label
-            print(f"\nResultados por area:")
-            for _, row in df_sucesso.iterrows():
-                print(f"  {row['Label']}: {row['Perda_Vegetacao (%)']}% ({row['Classificacao']})")
-
+        print(f"\n\nProcessamento finalizado! Resultados consolidados salvos em: {nome_csv}")
     else:
         print("\nNenhum resultado foi gerado.")
+
 
 if __name__ == "__main__":
     main()
