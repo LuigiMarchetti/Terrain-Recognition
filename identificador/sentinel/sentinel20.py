@@ -504,46 +504,62 @@ def main():
 
             # Criar nome da pasta com label
             label_limpo = sanitizar_nome_pasta(label)
-            pasta = f"resultados_ndvi/ponto_{idx+1}_{label_limpo}"
+            pasta = f"resultados_ndvi/ponto_{idx + 1}_{label_limpo}"
             os.makedirs(pasta, exist_ok=True)
 
-            # Salvar imagens
+            # Salvar imagens básicas
             Image.fromarray(rgb_antigo_uint8).save(f"{pasta}/rgb_antigo.png")
             Image.fromarray(rgb_recente_uint8).save(f"{pasta}/rgb_recente.png")
             Image.fromarray(((ndvi_antigo + 1) / 2 * 255).astype(np.uint8)).save(f"{pasta}/ndvi_antigo.png")
             Image.fromarray(((ndvi_recente + 1) / 2 * 255).astype(np.uint8)).save(f"{pasta}/ndvi_recente.png")
             Image.fromarray((mascara_perda.astype(np.uint8) * 255)).save(f"{pasta}/mascara_perda.png")
 
+            # Criar imagem com sobreposição da máscara de perda na imagem RGB atual
+            overlay_rgb = rgb_recente_uint8.copy()
+            mascara_rgb = np.zeros_like(overlay_rgb)
+            mascara_rgb[..., 0] = 255  # vermelho
+            alpha = 0.5
+            overlay_rgb[mascara_perda] = (
+                    (1 - alpha) * overlay_rgb[mascara_perda] + alpha * mascara_rgb[mascara_perda]
+            ).astype(np.uint8)
+
+            # Gerar imagem com sobreposição salva
+            Image.fromarray(overlay_rgb).save(f"{pasta}/rgb_com_mascara.png")
+
             plt.figure(figsize=(18, 5))
 
-            # Configuração comum para todos os subplots
+            # Configuração dos plots
             plot_configs = [
-                {'img': ndvi_antigo, 'title': f"NDVI Antigo\n{data_antiga}", 'cmap': 'YlGn'},
-                {'img': ndvi_recente, 'title': f"NDVI Recente\n{data_recente}", 'cmap': 'YlGn'},
+                {'img': rgb_antigo_uint8, 'title': f"Imagem RGB Antigo\n{data_antiga}", 'cmap': 'YlGn'},
+                {'img': rgb_recente_uint8, 'title': f"Imagem RGB Recente\n{data_recente}", 'cmap': 'YlGn'},
                 {'img': delta_ndvi, 'title': "Diferença NDVI\n(Recente - Antigo)", 'cmap': 'RdYlGn'},
-                {'img': mascara_perda, 'title': f"Perda Vegetação\n{percentual_perda:.2f}% - {classificacao}\n(Threshold: {threshold_usado:.4f})", 'cmap': ListedColormap(['#fff5f0', '#722F37'])}
+                {'img': overlay_rgb,
+                 'title': f"RGB Recente + Máscara de Perda\n{percentual_perda:.2f}% - {classificacao}", 'cmap': None}
             ]
 
             for i, config_plot in enumerate(plot_configs, 1):
                 plt.subplot(1, 4, i)
-                img = plt.imshow(config_plot['img'], cmap=config_plot['cmap'], vmin=-1 if i !=4 else 0, vmax=1)
+                if config_plot['cmap']:
+                    img = plt.imshow(config_plot['img'], cmap=config_plot['cmap'], vmin=-1 if i == 3 else 0,
+                                     vmax=1 if i == 3 else 255)
+                else:
+                    img = plt.imshow(config_plot['img'])  # para RGB com overlay
                 plt.axis('off')
                 plt.title(config_plot['title'], y=-0.18, pad=10)
 
-                # Barra de cores apenas para os 3 primeiros
-                if i < 4:
+                if i == 3:
                     plt.colorbar(img, shrink=0.8, pad=0.02)
 
+            # Legenda personalizada para a sobreposição
             legend_elements = [
-                Patch(facecolor='#fff5f0', edgecolor='black', label='Sem alteração'),
-                Patch(facecolor='#722F37', edgecolor='black', label='Perda vegetação')
+                Patch(facecolor='red', edgecolor='black', label='Perda de vegetação')
             ]
             plt.legend(
                 handles=legend_elements,
                 loc='upper center',
                 bbox_to_anchor=(0.5, -0.25),
                 frameon=True,
-                ncol=2,
+                ncol=1,
                 title="Legenda:"
             )
 
