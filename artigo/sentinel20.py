@@ -330,15 +330,8 @@ def main():
 
             mascara_veg = (ndvi_antigo > LIMIAR_VEGETACAO_PADRAO) & valid_data_mask
 
-            if modo_threshold == 1:
-                threshold_usado = calcular_threshold_adaptativo_vegetacao(delta_ndvi, mascara_veg, factor_n)
-                print(f"  Threshold Adaptativo (Vegetação) calculado: {threshold_usado:.4f}")
-            elif modo_threshold == 2:
-                threshold_usado = calcular_threshold_artigo(delta_ndvi_validos, factor_n)
-                print(f"  Threshold do Artigo (Média - n*σ) calculado: {threshold_usado:.4f}")
-            else:  # modo_threshold == 0
-                threshold_usado = limiar_perda_fixo
-                print(f"  Usando Threshold Fixo: {threshold_usado}")
+            threshold_usado = calcular_threshold_artigo(delta_ndvi_validos, factor_n)
+            print(f"  Threshold do Artigo (Média - n*σ) calculado: {threshold_usado:.4f}")
 
             mascara_perda = (delta_ndvi < threshold_usado) & mascara_veg
 

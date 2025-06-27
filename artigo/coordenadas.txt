@@ -1,6 +1,6 @@
 # ARQUIVO DE COORDENADAS PARA MONITORAMENTO DE VEGETAÇÃO
 #
-# Formato: latitude;longitude;tamanho_janela;limiar_perda;data_limite;fator;usar_adaptativo
+# Formato: latitude;longitude;tamanho_janela;limiar_perda;data_limite;fator
 #
 # PARÂMETROS:
 # - label: nome/rótulo do local (obrigatório, usado no nome da pasta)
@@ -13,7 +13,6 @@
 #   * Se não fornecida: compara as 2 imagens mais recentes disponíveis
 # - fator: fator multiplicador do desvio padrão (opcional, padrão: 1.7)
 #   * Quanto menor o valor maior será a sensibilidade para as mudanças na vegetação
-# - usar_adaptativo: se vamos usar o threshold adaptativou ou não (opcional, boolean)
 #
 # NOTAS:
 # - Linhas iniciadas com # são comentários
@@ -25,10 +24,10 @@
 # EXEMPLOS:
 
 # Ponto 1: Configuração completa - compara 2 imagens mais recentes
-Ponta Aguda - Morro República Argentina;-26.90567708545667;-49.0556474962708;0.0050;-0.2;30/06/2022;1.7
+Ponta Aguda - Morro República Argentina;-26.90567708545667;-49.0556474962708;0.0050;-0.2;30/06/2022;
 
 # Ponto 2: Compara com data limite específica (formato ISO)
-Velha Grande - Sitio Pra la do Toco;-26.96046686848641;-49.145220530125506;;;2023-06-20
+Velha Grande - Sitio Pra la do Toco;-26.96046686848641;-49.145220530125506;;;2023-12-31
 
 # Ponto 3: Área maior, mais sensível, com data limite (formato brasileiro)
 Testo Salto - R. Ribeirão Schelters;-26.868825565055406;-49.16984456369647;0.0050;-0.3;31/12/2023

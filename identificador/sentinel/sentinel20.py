@@ -1,41 +1,41 @@
-from matplotlib.colors import ListedColormap
-from matplotlib.patches import Patch
-from sentinelhub import SHConfig, BBox, CRS, SentinelHubRequest, DataCollection, MimeType, bbox_to_dimensions, SentinelHubCatalog
-import numpy as np
-import matplotlib.pyplot as plt
-from datetime import date, timedelta, datetime
-from PIL import Image
 import os
-import pandas as pd
 import re
-import math
+from datetime import date, timedelta, datetime
 
-# === CONFIGURAÇÃO DO SENTINEL HUB ===
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from PIL import Image
+from matplotlib.patches import Patch
+from sentinelhub import SHConfig, BBox, CRS, SentinelHubRequest, DataCollection, MimeType, bbox_to_dimensions, \
+    SentinelHubCatalog
+
+# CONFIGURAÇÃO DO SENTINEL HUB
 config = SHConfig()
 config.sh_client_id = '69b0e122-2c43-444c-a03a-11f80f0fa3f6'
 config.sh_client_secret = 'UzfLRBn4lWFxz9hypPOeWKxV4BW8LYsT'
 
-# === VALORES PADRÃO ===
+# VALORES PADRÃO
 TAMANHO_JANELA_PADRAO = 0.0050  # ~500m de raio
 LIMIAR_VEGETACAO_PADRAO = 0.4
 LIMIAR_PERDA_PADRAO = -0.2
-# === PARÂMETROS PARA THRESHOLD ADAPTATIVO ===
+# PARÂMETROS PARA THRESHOLD ADAPTATIVO
 FACTOR_STD_PADRAO = 1.7  # Fator multiplicador do desvio padrão
 USAR_THRESHOLD_ADAPTATIVO = True  # Flag para ativar/desativar threshold adaptativo
 
 hoje = date.today()
 
-# === EVALSCRIPTS ===
+# EVALSCRIPTS
 evalscript_rgb = """
 //VERSION=3
 function setup() {
   return {
-    input: ["B04", "B03", "B02"],
+    input: ["B04", "B03", "B02"], // Bandas vermelho, verde e azul (RGB)
     output: { bands: 3 }
   };
 }
-const gain = 2.5;
-const gamma = 1.3;
+const gain = 2.5; // Fator de intensidade do brilho
+const gamma = 1.3; // Valor de correção gamma
 function evaluatePixel(sample) {
   return [
     gain * Math.pow(sample.B04, 1/gamma),
@@ -49,44 +49,21 @@ evalscript_ndvi = """
 //VERSION=3
 function setup() {
   return {
-    input: ["B04", "B08", "SCL"],
-    output: { bands: 1, sampleType: "FLOAT32" }
+    input: ["B04", "B08", "SCL"], // Bandas: Vermelho, Infravermelho, Máscara de Classificação
+    output: { bands: 1, sampleType: "FLOAT32" } // Saída: 1 banda (NDVI) com precisão float
   };
 }
 function evaluatePixel(sample) {
   if ([3, 6, 8, 9, 10].includes(sample.SCL)) {
-    return [null];
+    return [null]; // Ignora: Sombras de nuvens (3), Água (6), Nuvens (8,9), Cirros (10)
   }
+  // Fórmula NDVI = (NIR - Vermelho) / (NIR + Vermelho)
   let ndvi = (sample.B08 - sample.B04) / (sample.B08 + sample.B04);
   return [ndvi];
 }
 """
 
-def calcular_area_hectares(tamanho_janela, latitude):
-    """
-    Calcula a área aproximada em hectares baseada no tamanho da janela e latitude
-    """
-    # Conversão aproximada de graus para metros na latitude especificada
-    # 1 grau de longitude varia com a latitude: cos(lat) * 111320 metros
-    # 1 grau de latitude é aproximadamente 111320 metros
-
-    lat_rad = math.radians(latitude)
-    metros_por_grau_lon = math.cos(lat_rad) * 111320
-    metros_por_grau_lat = 111320
-
-    # Área do retângulo (2 * tamanho_janela para cada dimensão)
-    largura_metros = 2 * tamanho_janela * metros_por_grau_lon
-    altura_metros = 2 * tamanho_janela * metros_por_grau_lat
-
-    area_m2 = largura_metros * altura_metros
-    area_hectares = area_m2 / 10000  # Converter para hectares
-
-    return round(area_hectares, 2)
-
 def sanitizar_nome_pasta(nome):
-    """
-    Remove caracteres inválidos para nomes de pasta e limita o tamanho
-    """
     # Remover caracteres especiais e substituir por underscore
     nome_limpo = re.sub(r'[<>:"/\\|?*\x00-\x1F]', '_', nome)
     # Remover espaços extras e substituir por underscore
@@ -97,10 +74,6 @@ def sanitizar_nome_pasta(nome):
     return nome_limpo
 
 def parse_data_limite(data_str):
-    """
-    Converte string de data para objeto date.
-    Aceita formatos: YYYY-MM-DD, DD/MM/YYYY, DD-MM-YYYY
-    """
     if not data_str or not data_str.strip():
         return None
 
@@ -127,7 +100,7 @@ def parse_data_limite(data_str):
         print(f"Erro ao converter data '{data_str}': {e}")
         return None
 
-def ler_coordenadas_arquivo(nome_arquivo):
+def ler_arquivo_txt(nome_arquivo):
     """
     Lê coordenadas de arquivo texto no formato:
     label;latitude;longitude;tamanho_janela;limiar_perda;data_limite;factor_std;usar_adaptativo
@@ -135,7 +108,7 @@ def ler_coordenadas_arquivo(nome_arquivo):
     Onde tamanho_janela, limiar_perda, data_limite, factor_std e usar_adaptativo são opcionais
     data_limite: data no formato YYYY-MM-DD, DD/MM/YYYY ou DD-MM-YYYY
                 Se não fornecida, usa as 2 imagens mais recentes
-    factor_std: fator multiplicador do desvio padrão (padrão: 3)
+    factor_std: fator multiplicador do desvio padrão (padrão: 1.7)
     usar_adaptativo: 1 para usar threshold adaptativo, 0 para usar fixo (padrão: 1)
     """
     coordenadas = []
@@ -235,10 +208,7 @@ def ler_coordenadas_arquivo(nome_arquivo):
 
     return coordenadas
 
-def buscar_imagem_com_data_limite(catalog, aoi, data_limite):
-    """
-    Busca uma imagem mais recente antes da data limite e a mais recente disponível
-    """
+def buscar_imagem_data_limite_e_mais_recente(catalog, aoi, data_limite):
     # Buscar imagem mais recente antes da data limite
     data_inicio_antiga = data_limite - timedelta(days=2*365)  # Buscar até 2 anos antes
 
@@ -287,10 +257,7 @@ def buscar_imagem_com_data_limite(catalog, aoi, data_limite):
 
     return data_recente, data_antiga
 
-def buscar_datas_validas(catalog, aoi, data_limite_recente, data_limite_antiga, num_imagens=2):
-    """
-    Busca as duas imagens mais recentes com baixa cobertura de nuvem
-    """
+def buscar_duas_imgs_mais_recentes_validas(catalog, aoi, data_limite_recente, data_limite_antiga, num_imagens=2):
     search_iterator = catalog.search(
         collection=DataCollection.SENTINEL2_L2A,
         bbox=aoi,
@@ -358,10 +325,6 @@ def classificar_perda(percentual):
         return "Gravissimo"
 
 def calcular_threshold_adaptativo(delta_ndvi, mascara_veg, factor_std):
-    """
-    Calcula o threshold adaptativo baseado no desvio padrão das mudanças de NDVI
-    nas áreas vegetadas
-    """
     if not np.any(mascara_veg):
         return -0.2  # Fallback para valor padrão se não houver vegetação
 
@@ -373,6 +336,20 @@ def calcular_threshold_adaptativo(delta_ndvi, mascara_veg, factor_std):
 
     return threshold_adaptativo
 
+def salva_imagens_ndvi(ndvi_data, filename, vmin=-1, vmax=1):
+    cmap_ndvi = plt.cm.RdYlGn
+    # Normalize os dados para 0-1
+    norm = plt.Normalize(vmin=vmin, vmax=vmax)
+    ndvi_normalized = norm(ndvi_data)
+
+    # Aplique o colormap
+    ndvi_colored = cmap_ndvi(ndvi_normalized)
+
+    # Converta para RGB (255) e remova o canal alpha se existir
+    ndvi_rgb = (ndvi_colored[..., :3] * 255).astype(np.uint8)
+
+    Image.fromarray(ndvi_rgb).save(filename)
+
 def main():
     global config
 
@@ -383,7 +360,7 @@ def main():
     print("=" * 60)
 
     # Ler coordenadas do arquivo
-    coordenadas = ler_coordenadas_arquivo(arquivo_coordenadas)
+    coordenadas = ler_arquivo_txt(arquivo_coordenadas)
 
     if not coordenadas:
         print("Nenhuma coordenada valida encontrada. Programa encerrado.")
@@ -391,10 +368,10 @@ def main():
 
     print(f"{len(coordenadas)} coordenada(s) carregada(s)")
 
-    # === ARMAZENAR RESULTADOS ===
+    # Armazenamos os resultados
     resultados = []
 
-    # === PROCESSAR TODAS AS COORDENADAS ===
+    # Processar coordenadas
     for idx, (label, lat, lon, tamanho_janela, limiar_perda, data_limite, factor_std, usar_adaptativo) in enumerate(coordenadas):
         print(f"\nProcessando {label} (ponto {idx+1}/{len(coordenadas)}): ({lat:.5f}, {lon:.5f})")
         print(f"   Janela: ±{tamanho_janela:.4f}° | Limiar fixo: {limiar_perda}")
@@ -406,9 +383,6 @@ def main():
             modo_comparacao = "2 imagens mais recentes"
         print(f"   Modo: {modo_comparacao}")
 
-        # Calcular área em hectares
-        area_hectares = calcular_area_hectares(tamanho_janela, lat)
-
         # Criar área de interesse
         aoi = BBox([lon - tamanho_janela, lat - tamanho_janela,
                     lon + tamanho_janela, lat + tamanho_janela], crs=CRS.WGS84)
@@ -419,13 +393,13 @@ def main():
 
         if data_limite:
             # Buscar uma imagem antes da data limite e uma recente
-            resultado_recente, resultado_antigo = buscar_imagem_com_data_limite(catalog, aoi, data_limite)
+            resultado_recente, resultado_antigo = buscar_imagem_data_limite_e_mais_recente(catalog, aoi, data_limite)
         else:
             # Buscar as duas imagens mais recentes nos últimos 2 anos
             data_limite_recente = hoje
             data_limite_antiga = hoje - timedelta(days=2 * 365)
 
-            resultado_recente, resultado_antigo = buscar_datas_validas(
+            resultado_recente, resultado_antigo = buscar_duas_imgs_mais_recentes_validas(
                 catalog, aoi, data_limite_recente, data_limite_antiga
             )
 
@@ -439,7 +413,6 @@ def main():
                 "Ponto": f"{idx+1}",
                 "Latitude": lat,
                 "Longitude": lon,
-                "Area_Hectares": area_hectares,
                 "Tamanho_Janela": tamanho_janela,
                 "Limiar_Perda_Fixo": limiar_perda,
                 "Factor_Std": factor_std,
@@ -484,7 +457,7 @@ def main():
             delta_ndvi = ndvi_recente - ndvi_antigo
             mascara_veg = ndvi_antigo > LIMIAR_VEGETACAO_PADRAO
 
-            # === IMPLEMENTAÇÃO DO THRESHOLD ADAPTATIVO ===
+            # IMPLEMENTAÇÃO DO THRESHOLD ADAPTATIVO
             if usar_adaptativo:
                 threshold_usado = calcular_threshold_adaptativo(delta_ndvi, mascara_veg, factor_std)
                 print(f"  Threshold adaptativo calculado: {threshold_usado:.4f}")
@@ -510,8 +483,8 @@ def main():
             # Salvar imagens básicas
             Image.fromarray(rgb_antigo_uint8).save(f"{pasta}/rgb_antigo.png")
             Image.fromarray(rgb_recente_uint8).save(f"{pasta}/rgb_recente.png")
-            Image.fromarray(((ndvi_antigo + 1) / 2 * 255).astype(np.uint8)).save(f"{pasta}/ndvi_antigo.png")
-            Image.fromarray(((ndvi_recente + 1) / 2 * 255).astype(np.uint8)).save(f"{pasta}/ndvi_recente.png")
+            salva_imagens_ndvi(ndvi_antigo, f"{pasta}/ndvi_antigo.png")
+            salva_imagens_ndvi(ndvi_recente, f"{pasta}/ndvi_recente.png")
             Image.fromarray((mascara_perda.astype(np.uint8) * 255)).save(f"{pasta}/mascara_perda.png")
 
             # Criar imagem com sobreposição da máscara de perda na imagem RGB atual
@@ -574,7 +547,6 @@ def main():
                 "Ponto": f"{idx+1}",
                 "Latitude": lat,
                 "Longitude": lon,
-                "Area_Hectares": area_hectares,
                 "Tamanho_Janela": tamanho_janela,
                 "Limiar_Perda_Fixo": limiar_perda,
                 "Factor_Std": factor_std,
@@ -601,7 +573,6 @@ def main():
                 "Ponto": f"{idx+1}",
                 "Latitude": lat,
                 "Longitude": lon,
-                "Area_Hectares": area_hectares,
                 "Tamanho_Janela": tamanho_janela,
                 "Limiar_Perda_Fixo": limiar_perda,
                 "Factor_Std": factor_std,
@@ -621,19 +592,20 @@ def main():
                 "Status": f"Erro: {str(e)}"
             })
 
-    # === SALVAR RESULTADOS FINAIS ===
+    # Salva resultados finais
     if resultados:
         os.makedirs("resultados_ndvi", exist_ok=True)
         df = pd.DataFrame(resultados)
 
-        # Salvar apenas um CSV com todos os resultados
+        # Salva no CSV todos os resultados
         nome_csv = "resultados_ndvi/analise_vegetacao_completa.csv"
         df.to_csv(nome_csv, index=False, encoding='utf-8-sig')
 
         print(f"\nProcessamento finalizado!")
-        print(f"Resultados salvos em: {nome_csv}")
+        print(f"Resultados salvos em: {nome_csv}\n\n")
 
-        # Mostrar resumo
+        # Mostrar resumo console
+        print("=" * 60)
         sucessos = len([r for r in resultados if r["Status"] == "Sucesso"])
         print(f"\nResumo: {sucessos}/{len(resultados)} pontos processados com sucesso")
 
