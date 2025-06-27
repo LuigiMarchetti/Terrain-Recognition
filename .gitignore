@@ -1,0 +1,30 @@
+# Arquivos e pastas do PyCharm
+.idea/
+
+# Arquivos compilados do Python
+*.pyc
+*.pyo
+__pycache__/
+
+# Arquivos de ambientes virtuais
+venv/
+env/
+ENV/
+*.env
+
+# Arquivos de configuração específicos de IDEs (caso use outras)
+.vscode/
+*.swp
+*.swo
+
+# Arquivos de log
+*.log
+
+# Arquivos de backup do editor de texto
+*~
+*.bak
+
+# Outros arquivos temporários
+*.coverage
+*.hypothesis/
+.pytest_cache/
