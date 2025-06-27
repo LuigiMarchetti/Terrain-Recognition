@@ -20,7 +20,7 @@ TAMANHO_JANELA_PADRAO = 0.0050  # ~500m de raio
 LIMIAR_VEGETACAO_PADRAO = 0.4
 LIMIAR_PERDA_PADRAO = -0.2
 # === PARÂMETROS PARA THRESHOLD ADAPTATIVO ===
-FACTOR_STD_PADRAO = 3  # Fator multiplicador do desvio padrão
+FACTOR_STD_PADRAO = 1.7  # Fator multiplicador do desvio padrão
 USAR_THRESHOLD_ADAPTATIVO = True  # Flag para ativar/desativar threshold adaptativo
 
 hoje = date.today()

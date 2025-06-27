@@ -1,6 +1,6 @@
 # ARQUIVO DE COORDENADAS PARA MONITORAMENTO DE VEGETAÇÃO
 #
-# Formato: latitude;longitude;tamanho_janela;limiar_perda;data_limite
+# Formato: latitude;longitude;tamanho_janela;limiar_perda;data_limite;fator
 #
 # PARÂMETROS:
 # - label: nome/rótulo do local (obrigatório, usado no nome da pasta)
@@ -11,6 +11,8 @@
 # - data_limite: data limite para busca (opcional, formatos: YYYY-MM-DD, DD/MM/YYYY, DD-MM-YYYY)
 #   * Se fornecida: compara imagem mais recente antes desta data com a mais recente atual
 #   * Se não fornecida: compara as 2 imagens mais recentes disponíveis
+# - fator: fator multiplicador do desvio padrão (opcional, padrão: 1.7)
+#   * Quanto menor o valor maior será a sensibilidade para as mudanças na vegetação
 #
 # NOTAS:
 # - Linhas iniciadas com # são comentários
@@ -22,7 +24,7 @@
 # EXEMPLOS:
 
 # Ponto 1: Configuração completa - compara 2 imagens mais recentes
-Ponta Aguda - Morro República Argentina;-26.90567708545667;-49.0556474962708;0.0050;-0.2;
+Ponta Aguda - Morro República Argentina;-26.90567708545667;-49.0556474962708;0.0050;-0.2;30/06/2022;1.7
 
 # Ponto 2: Compara com data limite específica (formato ISO)
 Velha Grande - Sitio Pra la do Toco;-26.96046686848641;-49.145220530125506;;;2023-12-31
